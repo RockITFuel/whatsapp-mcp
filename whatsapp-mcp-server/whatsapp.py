@@ -663,7 +663,7 @@ def send_poll(recipient: str, question: str, options: List[str], multiple: bool 
     except requests.RequestException as e:
         return False, f"Request error: {str(e)}"
 
-def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
+def send_file(recipient: str, media_path: str, caption: Optional[str] = None) -> Tuple[bool, str]:
     try:
         # Validate input
         if not recipient:
@@ -676,9 +676,11 @@ def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
             return False, f"Media file not found: {media_path}"
         
         url = f"{WHATSAPP_API_BASE_URL}/send"
+        # The bridge uses "message" as the caption of a media message (voice notes have none).
         payload = {
             "recipient": recipient,
-            "media_path": media_path
+            "media_path": media_path,
+            "message": caption or "",
         }
         
         response = requests.post(url, json=payload)
