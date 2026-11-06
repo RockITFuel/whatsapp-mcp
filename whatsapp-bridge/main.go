@@ -90,7 +90,12 @@ func NewMessageStore() (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create tables: %v", err)
 	}
 
-	return &MessageStore{db: db}, nil
+	store := &MessageStore{db: db}
+	if err := store.initPolls(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create poll tables: %v", err)
+	}
+	return store, nil
 }
 
 // Close the database connection
@@ -257,6 +262,10 @@ func sendPoll(client *whatsmeow.Client, messageStore *MessageStore, req SendPoll
 	if err != nil {
 		return false, fmt.Sprintf("Error sending poll: %v", err)
 	}
+	// Keep the options, so the votes that come back can be decoded.
+	if err := messageStore.StorePoll(resp.ID, recipientJID.String(), req.Question, req.Options, req.Multiple, resp.Timestamp); err != nil {
+		fmt.Printf("Failed to store poll: %v\n", err)
+	}
 	// Like text sends, keep our own poll in the chat history, as readable text.
 	if client.Store.ID != nil {
 		text := fmt.Sprintf("[poll] %s: %s", req.Question, strings.Join(req.Options, " / "))
@@ -357,6 +366,10 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp)
 	if err != nil {
 		logger.Warnf("Failed to store chat: %v", err)
+	}
+
+	if handlePollMessage(client, messageStore, msg, logger) {
+		return
 	}
 
 	// Extract text content

@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Optional, List, Tuple
+from typing import Any, Dict, Optional, List, Tuple
 import os.path
 import requests
 import json
@@ -863,3 +863,36 @@ def send_album(recipient: str, media_paths: List[str], caption: Optional[str] = 
     if missing:
         return False, f"Media file not found: {', '.join(missing)}"
     return _bridge_post("album", {"recipient": recipient, "media_paths": media_paths, "caption": caption or ""})
+
+
+def get_poll_results(chat_jid: str, poll_id: Optional[str] = None) -> Dict[str, Any]:
+    """The poll (the latest in the chat unless poll_id is given) with the votes per option."""
+    conn = sqlite3.connect(MESSAGES_DB_PATH)
+    try:
+        cursor = conn.cursor()
+        if poll_id:
+            cursor.execute("SELECT id, question, options, multiple, created_at FROM polls WHERE chat_jid = ? AND id = ?", (chat_jid, poll_id))
+        else:
+            cursor.execute("SELECT id, question, options, multiple, created_at FROM polls WHERE chat_jid = ? ORDER BY created_at DESC LIMIT 1", (chat_jid,))
+        row = cursor.fetchone()
+        if not row:
+            return {"error": "No poll found"}
+        found_id, question, options_json, multiple, created_at = row
+        options = json.loads(options_json)
+        cursor.execute("SELECT voter, options, voted_at FROM poll_votes WHERE poll_id = ? AND chat_jid = ? ORDER BY voted_at", (found_id, chat_jid))
+        votes = [{"voter": voter, "options": json.loads(chosen), "voted_at": voted_at} for voter, chosen, voted_at in cursor.fetchall()]
+        counted = [vote for vote in votes if vote["options"]]
+        return {
+            "poll_id": found_id,
+            "question": question,
+            "multiple": bool(multiple),
+            "created_at": created_at,
+            "results": [
+                {"option": option, "votes": sum(option in vote["options"] for vote in counted),
+                 "voters": [vote["voter"] for vote in counted if option in vote["options"]]}
+                for option in options
+            ],
+            "voters": len(counted),
+        }
+    finally:
+        conn.close()

@@ -15,6 +15,7 @@ from whatsapp import (
     send_message as whatsapp_send_message,
     send_file as whatsapp_send_file,
     send_poll as whatsapp_send_poll,
+    get_poll_results as whatsapp_get_poll_results,
     send_audio_message as whatsapp_audio_voice_message,
     download_media as whatsapp_download_media,
     reply_to_message as whatsapp_reply_to_message,
@@ -216,6 +217,20 @@ def send_poll(
     """
     success, status_message = whatsapp_send_poll(recipient, question, options, multiple)
     return {"success": success, "message": status_message}
+
+@mcp.tool()
+def get_poll_results(chat_jid: str, poll_id: Optional[str] = None) -> Dict[str, Any]:
+    """Get a WhatsApp poll's results: votes and voters per option.
+
+    Args:
+        chat_jid: The chat the poll is in (a group JID like "123456789@g.us")
+        poll_id: Optional message ID of the poll; default the latest poll in the chat
+
+    Returns:
+        The question, each option with its vote count and voters, and the number of voters.
+        Only votes cast after the bridge learned of the poll are known.
+    """
+    return whatsapp_get_poll_results(chat_jid, poll_id)
 
 @mcp.tool()
 def send_file(recipient: str, media_path: str, caption: Optional[str] = None) -> Dict[str, Any]:
