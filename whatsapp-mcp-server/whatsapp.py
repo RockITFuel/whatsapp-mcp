@@ -334,11 +334,14 @@ def list_chats(
                 chats.jid,
                 chats.name,
                 chats.last_message_time,
-                messages.content as last_message,
-                messages.sender as last_sender,
-                messages.is_from_me as last_is_from_me
+                {last_columns}
             FROM chats
-        """]
+        """.format(last_columns=(
+            "messages.content as last_message, messages.sender as last_sender, "
+            "messages.is_from_me as last_is_from_me"
+            if include_last_message
+            else "NULL as last_message, NULL as last_sender, NULL as last_is_from_me"
+        ))]
         
         if include_last_message:
             query_parts.append("""
@@ -543,11 +546,13 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
                 c.jid,
                 c.name,
                 c.last_message_time,
-                m.content as last_message,
-                m.sender as last_sender,
-                m.is_from_me as last_is_from_me
+                {last_columns}
             FROM chats c
-        """
+        """.format(last_columns=(
+            "m.content as last_message, m.sender as last_sender, m.is_from_me as last_is_from_me"
+            if include_last_message
+            else "NULL as last_message, NULL as last_sender, NULL as last_is_from_me"
+        ))
         
         if include_last_message:
             query += """
@@ -649,6 +654,20 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
         return False, f"Error parsing response: {response.text}"
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
+
+def send_poll(recipient: str, question: str, options: List[str], multiple: bool = False) -> Tuple[bool, str]:
+    try:
+        if not recipient:
+            return False, "Recipient must be provided"
+        payload = {"recipient": recipient, "question": question, "options": options, "multiple": multiple}
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/poll", json=payload)
+        try:
+            result = response.json()
+        except json.JSONDecodeError:
+            return False, f"Error: HTTP {response.status_code} - {response.text}"
+        return result.get("success", False), result.get("message", "Unknown response")
+    except requests.RequestException as e:
+        return False, f"Request error: {str(e)}"
 
 def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
     try:
