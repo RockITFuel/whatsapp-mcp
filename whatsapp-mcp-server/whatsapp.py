@@ -839,3 +839,19 @@ def edit_message(message_id: str, new_text: str, chat_jid: Optional[str] = None)
 def delete_message(message_id: str, chat_jid: Optional[str] = None) -> Tuple[bool, str]:
     """Delete a message we sent, for everyone."""
     return _bridge_post("revoke", {"message_id": message_id, "chat_jid": chat_jid or ""})
+
+
+def get_group_info(group_jid: str) -> dict:
+    """Name, description and members (named, admins marked) of a group, fresh from WhatsApp."""
+    try:
+        response = requests.get(f"{WHATSAPP_API_BASE_URL}/group", params={"jid": group_jid})
+        info = response.json()
+    except requests.RequestException as e:
+        return {"success": False, "message": f"Request error: {str(e)}"}
+    except ValueError:
+        return {"success": False, "message": f"Error: HTTP {response.status_code} - {response.text}"}
+    # Members the bridge could not name may still be in the address book under their LID.
+    for member in info.get("participants") or []:
+        if not member.get("name"):
+            member["name"] = directory().name(member.get("lid") or member.get("jid"))
+    return info

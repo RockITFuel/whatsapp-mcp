@@ -18,6 +18,7 @@ from whatsapp import (
     send_reaction as whatsapp_send_reaction,
     edit_message as whatsapp_edit_message,
     delete_message as whatsapp_delete_message,
+    get_group_info as whatsapp_get_group_info,
 )
 
 # Initialize FastMCP server
@@ -297,6 +298,15 @@ def delete_message(message_id: str, chat_jid: Optional[str] = None) -> Dict[str,
     """
     success, status_message = whatsapp_delete_message(message_id, chat_jid)
     return {"success": success, "message": status_message}
+
+@mcp.tool()
+def get_group_info(group_jid: str) -> Dict[str, Any]:
+    """Get a WhatsApp group's name, description and participants (with names, admins marked).
+
+    Args:
+        group_jid: The group's JID, ending in @g.us
+    """
+    return whatsapp_get_group_info(group_jid)
 
 @mcp.tool()
 def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:

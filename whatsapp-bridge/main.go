@@ -760,6 +760,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 	})
 
 	registerActionRoutes(client, messageStore)
+	registerGroupRoutes(client)
 
 	// Start the server
 	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
