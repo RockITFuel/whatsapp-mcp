@@ -201,6 +201,7 @@ type SendMessageRequest struct {
 	Recipient string `json:"recipient"`
 	Message   string `json:"message"`
 	MediaPath string `json:"media_path,omitempty"`
+	ReplyTo   string `json:"reply_to,omitempty"` // id of a message to quote: the send becomes a reply to it
 }
 
 // parseRecipient takes a JID ("...@g.us", "...@s.whatsapp.net") or a bare phone number with country code.
@@ -287,6 +288,13 @@ func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, r
 		msg, media = built, &sent
 	} else {
 		msg = &waProto.Message{Conversation: proto.String(req.Message)}
+	}
+	if req.ReplyTo != "" {
+		quoted, err := messageStore.findMessage(req.ReplyTo, recipientJID.String())
+		if err != nil {
+			return false, err.Error(), ""
+		}
+		withContext(msg, quoteOf(client, quoted))
 	}
 
 	resp, err := client.SendMessage(context.Background(), recipientJID, msg)
@@ -750,6 +758,8 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			Path:     path,
 		})
 	})
+
+	registerActionRoutes(client, messageStore)
 
 	// Start the server
 	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)

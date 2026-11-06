@@ -13,7 +13,9 @@ from whatsapp import (
     send_file as whatsapp_send_file,
     send_poll as whatsapp_send_poll,
     send_audio_message as whatsapp_audio_voice_message,
-    download_media as whatsapp_download_media
+    download_media as whatsapp_download_media,
+    reply_to_message as whatsapp_reply_to_message,
+    send_reaction as whatsapp_send_reaction,
 )
 
 # Initialize FastMCP server
@@ -246,6 +248,30 @@ def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
         "success": success,
         "message": status_message
     }
+
+@mcp.tool()
+def reply_to_message(message_id: str, message: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """Reply to a WhatsApp message: send text in its chat that quotes it.
+
+    Args:
+        message_id: The id of the message to quote (list_messages shows it)
+        message: The reply text
+        chat_jid: The chat of the message; found from the message id when left out
+    """
+    success, status_message = whatsapp_reply_to_message(message_id, message, chat_jid)
+    return {"success": success, "message": status_message}
+
+@mcp.tool()
+def send_reaction(message_id: str, emoji: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """React to a WhatsApp message with an emoji.
+
+    Args:
+        message_id: The id of the message to react to (list_messages shows it)
+        emoji: One emoji, e.g. "👍"; an empty string removes our reaction
+        chat_jid: The chat of the message; found from the message id when left out
+    """
+    success, status_message = whatsapp_send_reaction(message_id, emoji, chat_jid)
+    return {"success": success, "message": status_message}
 
 @mcp.tool()
 def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:

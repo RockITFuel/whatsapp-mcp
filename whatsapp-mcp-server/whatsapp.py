@@ -788,3 +788,44 @@ def download_media(message_id: str, chat_jid: str) -> Optional[str]:
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         return None
+
+
+def _bridge_post(path: str, payload: dict) -> Tuple[bool, str]:
+    """POST to the bridge; it answers {"success", "message"} for successes and failures alike."""
+    try:
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/{path}", json=payload)
+    except requests.RequestException as e:
+        return False, f"Request error: {str(e)}"
+    try:
+        result = response.json()
+    except ValueError:
+        return False, f"Error: HTTP {response.status_code} - {response.text}"
+    return result.get("success", False), result.get("message", "Unknown response")
+
+
+def chat_of_message(message_id: str) -> Optional[str]:
+    """The chat a stored message is in, so tools that act on a message need only its id."""
+    try:
+        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        row = conn.execute(
+            "SELECT chat_jid FROM messages WHERE id = ? ORDER BY timestamp DESC LIMIT 1", (message_id,)
+        ).fetchone()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+
+def reply_to_message(message_id: str, message: str, chat_jid: Optional[str] = None) -> Tuple[bool, str]:
+    """Send text in the message's chat, quoting the message."""
+    chat_jid = chat_jid or chat_of_message(message_id)
+    if not chat_jid:
+        return False, f"Message {message_id} not found"
+    return _bridge_post("send", {"recipient": chat_jid, "message": message, "reply_to": message_id})
+
+
+def send_reaction(message_id: str, emoji: str, chat_jid: Optional[str] = None) -> Tuple[bool, str]:
+    """React with an emoji; an empty emoji removes our reaction."""
+    return _bridge_post("react", {"message_id": message_id, "chat_jid": chat_jid or "", "emoji": emoji})
