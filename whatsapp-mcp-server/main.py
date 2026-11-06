@@ -1,3 +1,6 @@
+import os
+import threading
+import time
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
 from whatsapp import (
@@ -347,6 +350,24 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
             "message": "Failed to download media"
         }
 
+def exit_with_client() -> None:
+    """Exit when the process that started us goes away.
+
+    Over ssh the stdio server outlived its session: when the client closed, the server was
+    re-parented instead of ending, and they piled up (147 of them, 7.5 GB on luka-mini).
+    Watching the parent ends it within a few seconds of the client.
+    """
+    parent = os.getppid()
+
+    def watch() -> None:
+        while True:
+            time.sleep(5)
+            if os.getppid() != parent:
+                os._exit(0)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 if __name__ == "__main__":
-    # Initialize and run the server
+    exit_with_client()
     mcp.run(transport='stdio')
