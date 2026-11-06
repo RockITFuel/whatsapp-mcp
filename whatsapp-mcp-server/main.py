@@ -16,6 +16,8 @@ from whatsapp import (
     download_media as whatsapp_download_media,
     reply_to_message as whatsapp_reply_to_message,
     send_reaction as whatsapp_send_reaction,
+    edit_message as whatsapp_edit_message,
+    delete_message as whatsapp_delete_message,
 )
 
 # Initialize FastMCP server
@@ -271,6 +273,29 @@ def send_reaction(message_id: str, emoji: str, chat_jid: Optional[str] = None) -
         chat_jid: The chat of the message; found from the message id when left out
     """
     success, status_message = whatsapp_send_reaction(message_id, emoji, chat_jid)
+    return {"success": success, "message": status_message}
+
+@mcp.tool()
+def edit_message(message_id: str, new_text: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """Edit the text of a WhatsApp message we sent, within 20 minutes of sending it.
+
+    Args:
+        message_id: The id of our message (send tools and list_messages show it)
+        new_text: The new text
+        chat_jid: The chat of the message; found from the message id when left out
+    """
+    success, status_message = whatsapp_edit_message(message_id, new_text, chat_jid)
+    return {"success": success, "message": status_message}
+
+@mcp.tool()
+def delete_message(message_id: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """Delete a WhatsApp message we sent, for everyone. This cannot be undone.
+
+    Args:
+        message_id: The id of our message (send tools and list_messages show it)
+        chat_jid: The chat of the message; found from the message id when left out
+    """
+    success, status_message = whatsapp_delete_message(message_id, chat_jid)
     return {"success": success, "message": status_message}
 
 @mcp.tool()

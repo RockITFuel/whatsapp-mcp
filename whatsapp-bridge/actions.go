@@ -129,6 +129,55 @@ func react(client *whatsmeow.Client, store *MessageStore, req MessageActionReque
 	return true, fmt.Sprintf("Reacted %s to %s", req.Emoji, m.ID)
 }
 
+// editMessage replaces the text of a message we sent. WhatsApp only accepts edits of our own
+// messages within its edit window, so both are checked here for a clear error instead of a silent no-op.
+func editMessage(client *whatsmeow.Client, store *MessageStore, req MessageActionRequest) (bool, string) {
+	m, err := store.findMessage(req.MessageID, req.ChatJID)
+	if err != nil {
+		return false, err.Error()
+	}
+	if !m.IsFromMe {
+		return false, "Only our own messages can be edited"
+	}
+	if m.MediaType != "" {
+		return false, "Only text messages can be edited"
+	}
+	if time.Since(m.Timestamp) > whatsmeow.EditWindow {
+		return false, fmt.Sprintf("Too late to edit: WhatsApp allows edits for %s after sending", whatsmeow.EditWindow)
+	}
+	edit := client.BuildEdit(m.Chat, m.ID, &waProto.Message{Conversation: proto.String(req.Message)})
+	if _, err := client.SendMessage(context.Background(), m.Chat, edit); err != nil {
+		return false, fmt.Sprintf("Error editing message: %v", err)
+	}
+	if _, err := store.db.Exec("UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ?", req.Message, m.ID, m.Chat.String()); err != nil {
+		fmt.Printf("Failed to store edited message: %v\n", err)
+	}
+	return true, fmt.Sprintf("Message %s edited", m.ID)
+}
+
+// revokeMessage deletes a message we sent for everyone. Others' messages are left alone even
+// where we are group admin: a revoke cannot be taken back.
+func revokeMessage(client *whatsmeow.Client, store *MessageStore, req MessageActionRequest) (bool, string) {
+	m, err := store.findMessage(req.MessageID, req.ChatJID)
+	if err != nil {
+		return false, err.Error()
+	}
+	if !m.IsFromMe {
+		return false, "Only our own messages can be deleted"
+	}
+	if _, err := client.SendMessage(context.Background(), m.Chat, client.BuildRevoke(m.Chat, types.EmptyJID, m.ID)); err != nil {
+		return false, fmt.Sprintf("Error deleting message: %v", err)
+	}
+	// Keep the row, so the history shows that something was said and taken back.
+	if _, err := store.db.Exec(
+		"UPDATE messages SET content = '[deleted]', media_type = '', filename = '', url = '', media_key = NULL, file_sha256 = NULL, file_enc_sha256 = NULL, file_length = 0 WHERE id = ? AND chat_jid = ?",
+		m.ID, m.Chat.String(),
+	); err != nil {
+		fmt.Printf("Failed to store deleted message: %v\n", err)
+	}
+	return true, fmt.Sprintf("Message %s deleted for everyone", m.ID)
+}
+
 // postHandler decodes a JSON POST body into T and answers with what handle returns.
 func postHandler[T any](handle func(T) (bool, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -164,5 +213,23 @@ func registerActionRoutes(client *whatsmeow.Client, store *MessageStore) {
 			return false, "Not connected to WhatsApp"
 		}
 		return react(client, store, req)
+	}))
+	http.HandleFunc("/api/edit", postHandler(func(req MessageActionRequest) (bool, string) {
+		if req.MessageID == "" || req.Message == "" {
+			return false, "message_id and message are required"
+		}
+		if !client.IsConnected() {
+			return false, "Not connected to WhatsApp"
+		}
+		return editMessage(client, store, req)
+	}))
+	http.HandleFunc("/api/revoke", postHandler(func(req MessageActionRequest) (bool, string) {
+		if req.MessageID == "" {
+			return false, "message_id is required"
+		}
+		if !client.IsConnected() {
+			return false, "Not connected to WhatsApp"
+		}
+		return revokeMessage(client, store, req)
 	}))
 }

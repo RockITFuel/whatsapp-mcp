@@ -829,3 +829,13 @@ def reply_to_message(message_id: str, message: str, chat_jid: Optional[str] = No
 def send_reaction(message_id: str, emoji: str, chat_jid: Optional[str] = None) -> Tuple[bool, str]:
     """React with an emoji; an empty emoji removes our reaction."""
     return _bridge_post("react", {"message_id": message_id, "chat_jid": chat_jid or "", "emoji": emoji})
+
+
+def edit_message(message_id: str, new_text: str, chat_jid: Optional[str] = None) -> Tuple[bool, str]:
+    """Replace the text of a message we sent."""
+    return _bridge_post("edit", {"message_id": message_id, "chat_jid": chat_jid or "", "message": new_text})
+
+
+def delete_message(message_id: str, chat_jid: Optional[str] = None) -> Tuple[bool, str]:
+    """Delete a message we sent, for everyone."""
+    return _bridge_post("revoke", {"message_id": message_id, "chat_jid": chat_jid or ""})
