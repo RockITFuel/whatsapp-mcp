@@ -21,8 +21,10 @@ mcp = FastMCP("whatsapp")
 
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
-    """Search WhatsApp contacts by name or phone number.
-    
+    """Search WhatsApp contacts (the address book and direct chats) by name or phone number.
+
+    Each result has `jid`, the JID to send to, plus the phone number and LID when known.
+
     Args:
         query: Search term to match against contact names or phone numbers
     """
@@ -78,7 +80,7 @@ def list_chats(
     include_last_message: bool = True,
     sort_by: str = "last_active"
 ) -> List[Dict[str, Any]]:
-    """Get WhatsApp chats matching specified criteria.
+    """Get WhatsApp chats matching specified criteria. Chats show contact names; `send_jid` is the JID to send to.
     
     Args:
         query: Optional search term to filter chats by name or JID

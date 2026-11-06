@@ -6,8 +6,9 @@ import os.path
 import requests
 import json
 import audio
+from contacts import STORE_DIR, directory
 
-MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
+MESSAGES_DB_PATH = os.path.join(STORE_DIR, 'messages.db')
 WHATSAPP_API_BASE_URL = "http://localhost:8080/api"
 
 @dataclass
@@ -29,6 +30,9 @@ class Chat:
     last_message: Optional[str] = None
     last_sender: Optional[str] = None
     last_is_from_me: Optional[bool] = None
+    last_sender_name: Optional[str] = None
+    # The JID to send to: a person's phone number JID when known, the group JID for groups.
+    send_jid: Optional[str] = None
 
     @property
     def is_group(self) -> bool:
@@ -37,9 +41,10 @@ class Chat:
 
 @dataclass
 class Contact:
-    phone_number: str
+    phone_number: Optional[str]
     name: Optional[str]
-    jid: str
+    jid: str  # the JID to send to
+    lid: Optional[str] = None
 
 @dataclass
 class MessageContext:
@@ -47,7 +52,33 @@ class MessageContext:
     before: List[Message]
     after: List[Message]
 
+def chat_display_name(jid: str, stored_name: Optional[str]) -> Optional[str]:
+    """The stored chat name, unless it is only a number: then the contact's name."""
+    if stored_name and not stored_name.isdigit() and stored_name != jid:
+        return stored_name
+    return directory().name(jid) or stored_name
+
+
+def chat_from_row(row) -> Chat:
+    """A Chat from (jid, name, last_message_time, last_message, last_sender, last_is_from_me), with names resolved."""
+    person = directory().resolve(row[0])
+    return Chat(
+        jid=row[0],
+        name=chat_display_name(row[0], row[1]),
+        last_message_time=datetime.fromisoformat(row[2]) if row[2] else None,
+        last_message=row[3],
+        last_sender=row[4],
+        last_is_from_me=row[5],
+        last_sender_name=("Me" if row[5] else get_sender_name(row[4])) if row[4] else None,
+        send_jid=person.jid if person else row[0],
+    )
+
+
 def get_sender_name(sender_jid: str) -> str:
+    # The address book knows LIDs and phone numbers; the chats table only knows chats we have.
+    name = directory().name(sender_jid)
+    if name:
+        return name
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
@@ -61,23 +92,6 @@ def get_sender_name(sender_jid: str) -> str:
         """, (sender_jid,))
         
         result = cursor.fetchone()
-        
-        # If no result, try looking for the number within JIDs
-        if not result:
-            # Extract the phone number part if it's a JID
-            if '@' in sender_jid:
-                phone_part = sender_jid.split('@')[0]
-            else:
-                phone_part = sender_jid
-                
-            cursor.execute("""
-                SELECT name
-                FROM chats
-                WHERE jid LIKE ?
-                LIMIT 1
-            """, (f"%{phone_part}%",))
-            
-            result = cursor.fetchone()
         
         if result and result[0]:
             return result[0]
@@ -100,7 +114,8 @@ def format_message(message: Message, show_chat_info: bool = True) -> None:
     else:
         output += f"[{message.timestamp:%Y-%m-%d %H:%M:%S}] "
         
-    content_prefix = ""
+    # Every line carries its message id: replying, reacting, editing and deleting all take it.
+    content_prefix = f"[id: {message.id}] "
     if hasattr(message, 'media_type') and message.media_type:
         content_prefix = f"[{message.media_type} - Message ID: {message.id} - Chat JID: {message.chat_jid}] "
     
@@ -164,8 +179,9 @@ def list_messages(
             params.append(before)
 
         if sender_phone_number:
-            where_clauses.append("messages.sender = ?")
-            params.append(sender_phone_number)
+            forms = directory().sender_forms(sender_phone_number)
+            where_clauses.append(f"messages.sender IN ({','.join('?' * len(forms))})")
+            params.extend(forms)
             
         if chat_jid:
             where_clauses.append("messages.chat_jid = ?")
@@ -192,7 +208,7 @@ def list_messages(
             message = Message(
                 timestamp=datetime.fromisoformat(msg[0]),
                 sender=msg[1],
-                chat_name=msg[2],
+                chat_name=chat_display_name(msg[5], msg[2]),
                 content=msg[3],
                 is_from_me=msg[4],
                 chat_jid=msg[5],
@@ -248,7 +264,7 @@ def get_message_context(
         target_message = Message(
             timestamp=datetime.fromisoformat(msg_data[0]),
             sender=msg_data[1],
-            chat_name=msg_data[2],
+            chat_name=chat_display_name(msg_data[5], msg_data[2]),
             content=msg_data[3],
             is_from_me=msg_data[4],
             chat_jid=msg_data[5],
@@ -271,7 +287,7 @@ def get_message_context(
             before_messages.append(Message(
                 timestamp=datetime.fromisoformat(msg[0]),
                 sender=msg[1],
-                chat_name=msg[2],
+                chat_name=chat_display_name(msg[5], msg[2]),
                 content=msg[3],
                 is_from_me=msg[4],
                 chat_jid=msg[5],
@@ -294,7 +310,7 @@ def get_message_context(
             after_messages.append(Message(
                 timestamp=datetime.fromisoformat(msg[0]),
                 sender=msg[1],
-                chat_name=msg[2],
+                chat_name=chat_display_name(msg[5], msg[2]),
                 content=msg[3],
                 is_from_me=msg[4],
                 chat_jid=msg[5],
@@ -373,14 +389,7 @@ def list_chats(
         
         result = []
         for chat_data in chats:
-            chat = Chat(
-                jid=chat_data[0],
-                name=chat_data[1],
-                last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-                last_message=chat_data[3],
-                last_sender=chat_data[4],
-                last_is_from_me=chat_data[5]
-            )
+            chat = chat_from_row(chat_data)
             result.append(chat)
             
         return result
@@ -394,45 +403,44 @@ def list_chats(
 
 
 def search_contacts(query: str) -> List[Contact]:
-    """Search contacts by name or phone number."""
+    """Search the address book and the direct chats by name or phone number.
+
+    The address book (whatsmeow_contacts) holds people we never chatted with, and the chats table
+    holds people who are not in the address book; both count. Each result has the JID to send to.
+    """
+    found = {}
+    for person in directory().search(query):
+        found[person.jid] = Contact(phone_number=person.phone_number, name=person.name, jid=person.jid, lid=person.lid)
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
-        
-        # Split query into characters to support partial matching
-        search_pattern = '%' +query + '%'
-        
+        search_pattern = '%' + query + '%'
         cursor.execute("""
-            SELECT DISTINCT 
-                jid,
-                name
+            SELECT DISTINCT jid, name
             FROM chats
-            WHERE 
+            WHERE
                 (LOWER(name) LIKE LOWER(?) OR LOWER(jid) LIKE LOWER(?))
                 AND jid NOT LIKE '%@g.us'
             ORDER BY name, jid
             LIMIT 50
         """, (search_pattern, search_pattern))
-        
-        contacts = cursor.fetchall()
-        
-        result = []
-        for contact_data in contacts:
-            contact = Contact(
-                phone_number=contact_data[0].split('@')[0],
-                name=contact_data[1],
-                jid=contact_data[0]
-            )
-            result.append(contact)
-            
-        return result
-        
+        for jid, name in cursor.fetchall():
+            person = directory().resolve(jid)
+            if person is None:
+                continue
+            if person.jid not in found:
+                found[person.jid] = Contact(
+                    phone_number=person.phone_number,
+                    name=chat_display_name(jid, name),
+                    jid=person.jid,
+                    lid=person.lid,
+                )
     except sqlite3.Error as e:
         print(f"Database error: {e}")
-        return []
     finally:
         if 'conn' in locals():
             conn.close()
+    return list(found.values())[:50]
 
 
 def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
@@ -447,6 +455,8 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         
+        forms = directory().sender_forms(jid)
+        placeholders = ','.join('?' * len(forms))
         cursor.execute("""
             SELECT DISTINCT
                 c.jid,
@@ -457,23 +467,16 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
                 m.is_from_me as last_is_from_me
             FROM chats c
             JOIN messages m ON c.jid = m.chat_jid
-            WHERE m.sender = ? OR c.jid = ?
+            WHERE m.sender IN ({forms}) OR c.jid IN ({forms})
             ORDER BY c.last_message_time DESC
             LIMIT ? OFFSET ?
-        """, (jid, jid, limit, page * limit))
+        """.format(forms=placeholders), (*forms, *forms, limit, page * limit))
         
         chats = cursor.fetchall()
         
         result = []
         for chat_data in chats:
-            chat = Chat(
-                jid=chat_data[0],
-                name=chat_data[1],
-                last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-                last_message=chat_data[3],
-                last_sender=chat_data[4],
-                last_is_from_me=chat_data[5]
-            )
+            chat = chat_from_row(chat_data)
             result.append(chat)
             
         return result
@@ -492,6 +495,8 @@ def get_last_interaction(jid: str) -> str:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         
+        forms = directory().sender_forms(jid)
+        placeholders = ','.join('?' * len(forms))
         cursor.execute("""
             SELECT 
                 m.timestamp,
@@ -504,10 +509,10 @@ def get_last_interaction(jid: str) -> str:
                 m.media_type
             FROM messages m
             JOIN chats c ON m.chat_jid = c.jid
-            WHERE m.sender = ? OR c.jid = ?
+            WHERE m.sender IN ({forms}) OR c.jid IN ({forms})
             ORDER BY m.timestamp DESC
             LIMIT 1
-        """, (jid, jid))
+        """.format(forms=placeholders), (*forms, *forms))
         
         msg_data = cursor.fetchone()
         
@@ -517,7 +522,7 @@ def get_last_interaction(jid: str) -> str:
         message = Message(
             timestamp=datetime.fromisoformat(msg_data[0]),
             sender=msg_data[1],
-            chat_name=msg_data[2],
+            chat_name=chat_display_name(msg_data[5], msg_data[2]),
             content=msg_data[3],
             is_from_me=msg_data[4],
             chat_jid=msg_data[5],
@@ -568,14 +573,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
         if not chat_data:
             return None
             
-        return Chat(
-            jid=chat_data[0],
-            name=chat_data[1],
-            last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-            last_message=chat_data[3],
-            last_sender=chat_data[4],
-            last_is_from_me=chat_data[5]
-        )
+        return chat_from_row(chat_data)
         
     except sqlite3.Error as e:
         print(f"Database error: {e}")
@@ -591,6 +589,8 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         
+        forms = directory().sender_forms(sender_phone_number)
+        placeholders = ','.join('?' * len(forms))
         cursor.execute("""
             SELECT 
                 c.jid,
@@ -602,23 +602,17 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
             FROM chats c
             LEFT JOIN messages m ON c.jid = m.chat_jid 
                 AND c.last_message_time = m.timestamp
-            WHERE c.jid LIKE ? AND c.jid NOT LIKE '%@g.us'
+            WHERE (c.jid IN ({forms}) OR c.jid LIKE ?) AND c.jid NOT LIKE '%@g.us'
+            ORDER BY c.jid IN ({forms}) DESC, c.last_message_time DESC
             LIMIT 1
-        """, (f"%{sender_phone_number}%",))
+        """.format(forms=placeholders), (*forms, f"%{sender_phone_number}%", *forms))
         
         chat_data = cursor.fetchone()
         
         if not chat_data:
             return None
             
-        return Chat(
-            jid=chat_data[0],
-            name=chat_data[1],
-            last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-            last_message=chat_data[3],
-            last_sender=chat_data[4],
-            last_is_from_me=chat_data[5]
-        )
+        return chat_from_row(chat_data)
         
     except sqlite3.Error as e:
         print(f"Database error: {e}")
