@@ -21,6 +21,7 @@ class Message:
     id: str
     chat_name: Optional[str] = None
     media_type: Optional[str] = None
+    filename: Optional[str] = None
 
 @dataclass
 class Chat:
@@ -117,7 +118,8 @@ def format_message(message: Message, show_chat_info: bool = True) -> None:
     # Every line carries its message id: replying, reacting, editing and deleting all take it.
     content_prefix = f"[id: {message.id}] "
     if hasattr(message, 'media_type') and message.media_type:
-        content_prefix = f"[{message.media_type} - Message ID: {message.id} - Chat JID: {message.chat_jid}] "
+        name = f" {message.filename}" if message.filename else ""
+        content_prefix = f"[{message.media_type}{name} - Message ID: {message.id} - Chat JID: {message.chat_jid}] "
     
     try:
         sender_name = get_sender_name(message.sender) if not message.is_from_me else "Me"
@@ -154,7 +156,7 @@ def list_messages(
         cursor = conn.cursor()
         
         # Build base query
-        query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type FROM messages"]
+        query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type, messages.filename FROM messages"]
         query_parts.append("JOIN chats ON messages.chat_jid = chats.jid")
         where_clauses = []
         params = []
@@ -213,7 +215,8 @@ def list_messages(
                 is_from_me=msg[4],
                 chat_jid=msg[5],
                 id=msg[6],
-                media_type=msg[7]
+                media_type=msg[7],
+                filename=msg[8]
             )
             result.append(message)
             
@@ -251,7 +254,7 @@ def get_message_context(
         
         # Get the target message first
         cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.chat_jid, messages.media_type
+            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.chat_jid, messages.media_type, messages.filename
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.id = ?
@@ -269,12 +272,13 @@ def get_message_context(
             is_from_me=msg_data[4],
             chat_jid=msg_data[5],
             id=msg_data[6],
-            media_type=msg_data[8]
+            media_type=msg_data[8],
+            filename=msg_data[9]
         )
         
         # Get messages before
         cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
+            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type, messages.filename
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp < ?
@@ -292,12 +296,13 @@ def get_message_context(
                 is_from_me=msg[4],
                 chat_jid=msg[5],
                 id=msg[6],
-                media_type=msg[7]
+                media_type=msg[7],
+                filename=msg[8]
             ))
         
         # Get messages after
         cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
+            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type, messages.filename
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp > ?
@@ -315,7 +320,8 @@ def get_message_context(
                 is_from_me=msg[4],
                 chat_jid=msg[5],
                 id=msg[6],
-                media_type=msg[7]
+                media_type=msg[7],
+                filename=msg[8]
             ))
         
         return MessageContext(
@@ -506,7 +512,8 @@ def get_last_interaction(jid: str) -> str:
                 m.is_from_me,
                 c.jid,
                 m.id,
-                m.media_type
+                m.media_type,
+                m.filename
             FROM messages m
             JOIN chats c ON m.chat_jid = c.jid
             WHERE m.sender IN ({forms}) OR c.jid IN ({forms})
@@ -527,7 +534,8 @@ def get_last_interaction(jid: str) -> str:
             is_from_me=msg_data[4],
             chat_jid=msg_data[5],
             id=msg_data[6],
-            media_type=msg_data[7]
+            media_type=msg_data[7],
+            filename=msg_data[8]
         )
         
         return format_message(message)
