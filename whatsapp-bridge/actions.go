@@ -232,4 +232,7 @@ func registerActionRoutes(client *whatsmeow.Client, store *MessageStore) {
 		}
 		return revokeMessage(client, store, req)
 	}))
+	http.HandleFunc("/api/album", postHandler(func(req SendAlbumRequest) (bool, string) {
+		return sendAlbum(client, store, req)
+	}))
 }

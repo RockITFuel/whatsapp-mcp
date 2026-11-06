@@ -19,6 +19,7 @@ from whatsapp import (
     edit_message as whatsapp_edit_message,
     delete_message as whatsapp_delete_message,
     get_group_info as whatsapp_get_group_info,
+    send_album as whatsapp_send_album,
 )
 
 # Initialize FastMCP server
@@ -233,6 +234,19 @@ def send_file(recipient: str, media_path: str, caption: Optional[str] = None) ->
         "success": success,
         "message": status_message
     }
+
+@mcp.tool()
+def send_album(recipient: str, media_paths: List[str], caption: Optional[str] = None) -> Dict[str, Any]:
+    """Send several images or videos as one WhatsApp album, in the given order. For group messages use the JID.
+
+    Args:
+        recipient: A phone number with country code but no + or other symbols, or a JID
+                 (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
+        media_paths: Absolute paths of 2 or more images or videos, in the order to show them
+        caption: Optional text, shown on the first item
+    """
+    success, status_message = whatsapp_send_album(recipient, media_paths, caption)
+    return {"success": success, "message": status_message}
 
 @mcp.tool()
 def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:

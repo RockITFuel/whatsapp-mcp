@@ -855,3 +855,11 @@ def get_group_info(group_jid: str) -> dict:
         if not member.get("name"):
             member["name"] = directory().name(member.get("lid") or member.get("jid"))
     return info
+
+
+def send_album(recipient: str, media_paths: List[str], caption: Optional[str] = None) -> Tuple[bool, str]:
+    """Send images or videos, in order, as one album; the caption goes on the first."""
+    missing = [p for p in media_paths if not os.path.isfile(p)]
+    if missing:
+        return False, f"Media file not found: {', '.join(missing)}"
+    return _bridge_post("album", {"recipient": recipient, "media_paths": media_paths, "caption": caption or ""})

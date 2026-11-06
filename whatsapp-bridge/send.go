@@ -10,6 +10,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 )
@@ -153,4 +154,81 @@ func storeOwnSend(client *whatsmeow.Client, store *MessageStore, chat types.JID,
 	if err != nil {
 		fmt.Printf("Failed to store sent message: %v\n", err)
 	}
+}
+
+// SendAlbumRequest is several images or videos for one chat, grouped as one album.
+type SendAlbumRequest struct {
+	Recipient  string   `json:"recipient"`
+	MediaPaths []string `json:"media_paths"`
+	Caption    string   `json:"caption,omitempty"` // shown on the first item, as WhatsApp does
+}
+
+// sendAlbum sends the files in order as one album: an album message announces how many images
+// and videos follow, and each item points back at it. Everything is uploaded before anything is
+// sent, so a bad file fails the call without leaving half an album in the chat.
+func sendAlbum(client *whatsmeow.Client, store *MessageStore, req SendAlbumRequest) (bool, string) {
+	if !client.IsConnected() {
+		return false, "Not connected to WhatsApp"
+	}
+	if len(req.MediaPaths) < 2 {
+		return false, "An album needs at least 2 images or videos; use send_file for one"
+	}
+	chat, err := parseRecipient(req.Recipient)
+	if err != nil {
+		return false, err.Error()
+	}
+
+	type item struct {
+		msg  *waProto.Message
+		sent sentMedia
+	}
+	items := make([]item, 0, len(req.MediaPaths))
+	var images, videos uint32
+	for i, path := range req.MediaPaths {
+		if kind, _ := mediaKind(path); kind != whatsmeow.MediaImage && kind != whatsmeow.MediaVideo {
+			return false, fmt.Sprintf("Only images and videos go in an album: %s", path)
+		}
+		caption := ""
+		if i == 0 {
+			caption = req.Caption
+		}
+		msg, sent, err := buildMediaMessage(client, path, caption)
+		if err != nil {
+			return false, fmt.Sprintf("%s: %v", path, err)
+		}
+		if sent.Type == "image" {
+			images++
+		} else {
+			videos++
+		}
+		items = append(items, item{msg, sent})
+	}
+
+	parent, err := client.SendMessage(context.Background(), chat, &waProto.Message{
+		AlbumMessage: &waE2E.AlbumMessage{ExpectedImageCount: proto.Uint32(images), ExpectedVideoCount: proto.Uint32(videos)},
+	})
+	if err != nil {
+		return false, fmt.Sprintf("Error starting album: %v", err)
+	}
+	parentKey := client.BuildMessageKey(chat, types.EmptyJID, parent.ID)
+	ids := make([]string, 0, len(items))
+	for i, it := range items {
+		it.msg.MessageContextInfo = &waE2E.MessageContextInfo{
+			MessageAssociation: &waE2E.MessageAssociation{
+				AssociationType:  waE2E.MessageAssociation_MEDIA_ALBUM.Enum(),
+				ParentMessageKey: parentKey,
+			},
+		}
+		resp, err := client.SendMessage(context.Background(), chat, it.msg)
+		if err != nil {
+			return false, fmt.Sprintf("Error sending album item %d of %d (%d sent: %s): %v", i+1, len(items), len(ids), strings.Join(ids, ", "), err)
+		}
+		caption := ""
+		if i == 0 {
+			caption = req.Caption
+		}
+		storeOwnSend(client, store, chat, resp, caption, &it.sent)
+		ids = append(ids, resp.ID)
+	}
+	return true, fmt.Sprintf("Album of %d sent to %s (ids %s)", len(ids), req.Recipient, strings.Join(ids, ", "))
 }
