@@ -13,7 +13,13 @@ from whatsapp import (
     send_file as whatsapp_send_file,
     send_poll as whatsapp_send_poll,
     send_audio_message as whatsapp_audio_voice_message,
-    download_media as whatsapp_download_media
+    download_media as whatsapp_download_media,
+    reply_to_message as whatsapp_reply_to_message,
+    send_reaction as whatsapp_send_reaction,
+    edit_message as whatsapp_edit_message,
+    delete_message as whatsapp_delete_message,
+    get_group_info as whatsapp_get_group_info,
+    send_album as whatsapp_send_album,
 )
 
 # Initialize FastMCP server
@@ -21,8 +27,10 @@ mcp = FastMCP("whatsapp")
 
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
-    """Search WhatsApp contacts by name or phone number.
-    
+    """Search WhatsApp contacts (the address book and direct chats) by name or phone number.
+
+    Each result has `jid`, the JID to send to, plus the phone number and LID when known.
+
     Args:
         query: Search term to match against contact names or phone numbers
     """
@@ -78,7 +86,7 @@ def list_chats(
     include_last_message: bool = True,
     sort_by: str = "last_active"
 ) -> List[Dict[str, Any]]:
-    """Get WhatsApp chats matching specified criteria.
+    """Get WhatsApp chats matching specified criteria. Chats show contact names; `send_jid` is the JID to send to.
     
     Args:
         query: Optional search term to filter chats by name or JID
@@ -207,24 +215,38 @@ def send_poll(
     return {"success": success, "message": status_message}
 
 @mcp.tool()
-def send_file(recipient: str, media_path: str) -> Dict[str, Any]:
+def send_file(recipient: str, media_path: str, caption: Optional[str] = None) -> Dict[str, Any]:
     """Send a file such as a picture, raw audio, video or document via WhatsApp to the specified recipient. For group messages use the JID.
     
     Args:
         recipient: The recipient - either a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
         media_path: The absolute path to the media file to send (image, video, document)
+        caption: Optional text shown with the image, video or document
     
     Returns:
         A dictionary containing success status and a status message
     """
     
     # Call the whatsapp_send_file function
-    success, status_message = whatsapp_send_file(recipient, media_path)
+    success, status_message = whatsapp_send_file(recipient, media_path, caption)
     return {
         "success": success,
         "message": status_message
     }
+
+@mcp.tool()
+def send_album(recipient: str, media_paths: List[str], caption: Optional[str] = None) -> Dict[str, Any]:
+    """Send several images or videos as one WhatsApp album, in the given order. For group messages use the JID.
+
+    Args:
+        recipient: A phone number with country code but no + or other symbols, or a JID
+                 (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
+        media_paths: Absolute paths of 2 or more images or videos, in the order to show them
+        caption: Optional text, shown on the first item
+    """
+    success, status_message = whatsapp_send_album(recipient, media_paths, caption)
+    return {"success": success, "message": status_message}
 
 @mcp.tool()
 def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
@@ -243,6 +265,62 @@ def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
         "success": success,
         "message": status_message
     }
+
+@mcp.tool()
+def reply_to_message(message_id: str, message: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """Reply to a WhatsApp message: send text in its chat that quotes it.
+
+    Args:
+        message_id: The id of the message to quote (list_messages shows it)
+        message: The reply text
+        chat_jid: The chat of the message; found from the message id when left out
+    """
+    success, status_message = whatsapp_reply_to_message(message_id, message, chat_jid)
+    return {"success": success, "message": status_message}
+
+@mcp.tool()
+def send_reaction(message_id: str, emoji: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """React to a WhatsApp message with an emoji.
+
+    Args:
+        message_id: The id of the message to react to (list_messages shows it)
+        emoji: One emoji, e.g. "👍"; an empty string removes our reaction
+        chat_jid: The chat of the message; found from the message id when left out
+    """
+    success, status_message = whatsapp_send_reaction(message_id, emoji, chat_jid)
+    return {"success": success, "message": status_message}
+
+@mcp.tool()
+def edit_message(message_id: str, new_text: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """Edit the text of a WhatsApp message we sent, within 20 minutes of sending it.
+
+    Args:
+        message_id: The id of our message (send tools and list_messages show it)
+        new_text: The new text
+        chat_jid: The chat of the message; found from the message id when left out
+    """
+    success, status_message = whatsapp_edit_message(message_id, new_text, chat_jid)
+    return {"success": success, "message": status_message}
+
+@mcp.tool()
+def delete_message(message_id: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """Delete a WhatsApp message we sent, for everyone. This cannot be undone.
+
+    Args:
+        message_id: The id of our message (send tools and list_messages show it)
+        chat_jid: The chat of the message; found from the message id when left out
+    """
+    success, status_message = whatsapp_delete_message(message_id, chat_jid)
+    return {"success": success, "message": status_message}
+
+@mcp.tool()
+def get_group_info(group_jid: str) -> Dict[str, Any]:
+    """Get a WhatsApp group's name, description and participants (with names, admins marked).
+
+    Args:
+        group_jid: The group's JID, ending in @g.us
+    """
+    return whatsapp_get_group_info(group_jid)
 
 @mcp.tool()
 def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:

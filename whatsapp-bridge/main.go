@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"mime"
 	"net/http"
 	"os"
 	"os/signal"
@@ -194,6 +193,7 @@ func extractTextContent(msg *waProto.Message) string {
 type SendMessageResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
+	ID      string `json:"id,omitempty"` // id of the sent message
 }
 
 // SendMessageRequest represents the request body for the send message API
@@ -201,6 +201,7 @@ type SendMessageRequest struct {
 	Recipient string `json:"recipient"`
 	Message   string `json:"message"`
 	MediaPath string `json:"media_path,omitempty"`
+	ReplyTo   string `json:"reply_to,omitempty"` // id of a message to quote: the send becomes a reply to it
 }
 
 // parseRecipient takes a JID ("...@g.us", "...@s.whatsapp.net") or a bare phone number with country code.
@@ -266,168 +267,44 @@ func sendPoll(client *whatsmeow.Client, messageStore *MessageStore, req SendPoll
 	return true, fmt.Sprintf("Poll sent to %s", req.Recipient)
 }
 
-// Function to send a WhatsApp message
-func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, recipient string, message string, mediaPath string) (bool, string) {
+// sendWhatsAppMessage sends a text, or a file with the text as its caption, and keeps it in messages.db.
+func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, req SendMessageRequest) (bool, string, string) {
 	if !client.IsConnected() {
-		return false, "Not connected to WhatsApp"
+		return false, "Not connected to WhatsApp", ""
 	}
 
-	recipientJID, err := parseRecipient(recipient)
+	recipientJID, err := parseRecipient(req.Recipient)
 	if err != nil {
-		return false, err.Error()
+		return false, err.Error(), ""
 	}
 
-	msg := &waProto.Message{}
-
-	// Check if we have media to send
-	if mediaPath != "" {
-		// Read media file
-		mediaData, err := os.ReadFile(mediaPath)
+	var msg *waProto.Message
+	var media *sentMedia
+	if req.MediaPath != "" {
+		built, sent, err := buildMediaMessage(client, req.MediaPath, req.Message)
 		if err != nil {
-			return false, fmt.Sprintf("Error reading media file: %v", err)
+			return false, err.Error(), ""
 		}
-
-		// Determine media type and mime type based on file extension
-		fileExt := strings.ToLower(mediaPath[strings.LastIndex(mediaPath, ".")+1:])
-		var mediaType whatsmeow.MediaType
-		var mimeType string
-
-		// Handle different media types
-		switch fileExt {
-		// Image types
-		case "jpg", "jpeg":
-			mediaType = whatsmeow.MediaImage
-			mimeType = "image/jpeg"
-		case "png":
-			mediaType = whatsmeow.MediaImage
-			mimeType = "image/png"
-		case "gif":
-			mediaType = whatsmeow.MediaImage
-			mimeType = "image/gif"
-		case "webp":
-			mediaType = whatsmeow.MediaImage
-			mimeType = "image/webp"
-
-		// Audio types
-		case "ogg":
-			mediaType = whatsmeow.MediaAudio
-			mimeType = "audio/ogg; codecs=opus"
-
-		// Video types
-		case "mp4":
-			mediaType = whatsmeow.MediaVideo
-			mimeType = "video/mp4"
-		case "avi":
-			mediaType = whatsmeow.MediaVideo
-			mimeType = "video/avi"
-		case "mov":
-			mediaType = whatsmeow.MediaVideo
-			mimeType = "video/quicktime"
-
-		// Document types (for any other file type)
-		default:
-			mediaType = whatsmeow.MediaDocument
-			mimeType = "application/octet-stream"
-			if byExt := mime.TypeByExtension("." + fileExt); byExt != "" {
-				mimeType = byExt
-			}
-		}
-
-		// Upload media to WhatsApp servers
-		resp, err := client.Upload(context.Background(), mediaData, mediaType)
-		if err != nil {
-			return false, fmt.Sprintf("Error uploading media: %v", err)
-		}
-
-		fmt.Println("Media uploaded", resp)
-
-		// Create the appropriate message type based on media type
-		switch mediaType {
-		case whatsmeow.MediaImage:
-			msg.ImageMessage = &waProto.ImageMessage{
-				Caption:       proto.String(message),
-				Mimetype:      proto.String(mimeType),
-				URL:           &resp.URL,
-				DirectPath:    &resp.DirectPath,
-				MediaKey:      resp.MediaKey,
-				FileEncSHA256: resp.FileEncSHA256,
-				FileSHA256:    resp.FileSHA256,
-				FileLength:    &resp.FileLength,
-			}
-		case whatsmeow.MediaAudio:
-			// Handle ogg audio files
-			var seconds uint32 = 30 // Default fallback
-			var waveform []byte = nil
-
-			// Try to analyze the ogg file
-			if strings.Contains(mimeType, "ogg") {
-				analyzedSeconds, analyzedWaveform, err := analyzeOggOpus(mediaData)
-				if err == nil {
-					seconds = analyzedSeconds
-					waveform = analyzedWaveform
-				} else {
-					return false, fmt.Sprintf("Failed to analyze Ogg Opus file: %v", err)
-				}
-			} else {
-				fmt.Printf("Not an Ogg Opus file: %s\n", mimeType)
-			}
-
-			msg.AudioMessage = &waProto.AudioMessage{
-				Mimetype:      proto.String(mimeType),
-				URL:           &resp.URL,
-				DirectPath:    &resp.DirectPath,
-				MediaKey:      resp.MediaKey,
-				FileEncSHA256: resp.FileEncSHA256,
-				FileSHA256:    resp.FileSHA256,
-				FileLength:    &resp.FileLength,
-				Seconds:       proto.Uint32(seconds),
-				PTT:           proto.Bool(true),
-				Waveform:      waveform,
-			}
-		case whatsmeow.MediaVideo:
-			msg.VideoMessage = &waProto.VideoMessage{
-				Caption:       proto.String(message),
-				Mimetype:      proto.String(mimeType),
-				URL:           &resp.URL,
-				DirectPath:    &resp.DirectPath,
-				MediaKey:      resp.MediaKey,
-				FileEncSHA256: resp.FileEncSHA256,
-				FileSHA256:    resp.FileSHA256,
-				FileLength:    &resp.FileLength,
-			}
-		case whatsmeow.MediaDocument:
-			msg.DocumentMessage = &waProto.DocumentMessage{
-				Title:         proto.String(mediaPath[strings.LastIndex(mediaPath, "/")+1:]),
-				FileName:      proto.String(mediaPath[strings.LastIndex(mediaPath, "/")+1:]),
-				Caption:       proto.String(message),
-				Mimetype:      proto.String(mimeType),
-				URL:           &resp.URL,
-				DirectPath:    &resp.DirectPath,
-				MediaKey:      resp.MediaKey,
-				FileEncSHA256: resp.FileEncSHA256,
-				FileSHA256:    resp.FileSHA256,
-				FileLength:    &resp.FileLength,
-			}
-		}
+		msg, media = built, &sent
 	} else {
-		msg.Conversation = proto.String(message)
+		msg = &waProto.Message{Conversation: proto.String(req.Message)}
 	}
-
-	// Send message
-	resp, err := client.SendMessage(context.Background(), recipientJID, msg)
-
-	if err != nil {
-		return false, fmt.Sprintf("Error sending message: %v", err)
-	}
-
-	// whatsmeow does not echo our own sends as events, so store text sends here to keep the chat history complete.
-	if mediaPath == "" && client.Store.ID != nil {
-		if err := messageStore.StoreMessage(resp.ID, recipientJID.String(), client.Store.ID.User, message, resp.Timestamp, true, "", "", "", nil, nil, nil, 0); err != nil {
-			fmt.Printf("Failed to store sent message: %v\n", err)
+	if req.ReplyTo != "" {
+		quoted, err := messageStore.findMessage(req.ReplyTo, recipientJID.String())
+		if err != nil {
+			return false, err.Error(), ""
 		}
+		withContext(msg, quoteOf(client, quoted))
 	}
 
-	return true, fmt.Sprintf("Message sent to %s", recipient)
+	resp, err := client.SendMessage(context.Background(), recipientJID, msg)
+	if err != nil {
+		return false, fmt.Sprintf("Error sending message: %v", err), ""
+	}
+	storeOwnSend(client, messageStore, recipientJID, resp, req.Message, media)
+
+	// The id lets the caller edit, delete, react to or quote what it just sent.
+	return true, fmt.Sprintf("Message sent to %s (id %s)", req.Recipient, resp.ID), resp.ID
 }
 
 // Extract media info from a message
@@ -790,7 +667,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		fmt.Println("Received request to send message", req.Message, req.MediaPath)
 
 		// Send the message
-		success, message := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, req.MediaPath)
+		success, message, id := sendWhatsAppMessage(client, messageStore, req)
 		fmt.Println("Message sent", success, message)
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
@@ -804,6 +681,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		json.NewEncoder(w).Encode(SendMessageResponse{
 			Success: success,
 			Message: message,
+			ID:      id,
 		})
 	})
 
@@ -880,6 +758,9 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			Path:     path,
 		})
 	})
+
+	registerActionRoutes(client, messageStore)
+	registerGroupRoutes(client)
 
 	// Start the server
 	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
