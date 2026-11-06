@@ -655,6 +655,20 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
+def send_poll(recipient: str, question: str, options: List[str], multiple: bool = False) -> Tuple[bool, str]:
+    try:
+        if not recipient:
+            return False, "Recipient must be provided"
+        payload = {"recipient": recipient, "question": question, "options": options, "multiple": multiple}
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/poll", json=payload)
+        try:
+            result = response.json()
+        except json.JSONDecodeError:
+            return False, f"Error: HTTP {response.status_code} - {response.text}"
+        return result.get("success", False), result.get("message", "Unknown response")
+    except requests.RequestException as e:
+        return False, f"Request error: {str(e)}"
+
 def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
     try:
         # Validate input

@@ -11,6 +11,7 @@ from whatsapp import (
     get_message_context as whatsapp_get_message_context,
     send_message as whatsapp_send_message,
     send_file as whatsapp_send_file,
+    send_poll as whatsapp_send_poll,
     send_audio_message as whatsapp_audio_voice_message,
     download_media as whatsapp_download_media
 )
@@ -182,6 +183,28 @@ def send_message(
         "success": success,
         "message": status_message
     }
+
+@mcp.tool()
+def send_poll(
+    recipient: str,
+    question: str,
+    options: List[str],
+    multiple: bool = False
+) -> Dict[str, Any]:
+    """Send a WhatsApp poll to a person or group. For group chats use the JID.
+
+    Args:
+        recipient: A phone number with country code but no + or other symbols, or a JID
+                 (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
+        question: The poll question
+        options: 2 to 12 distinct answer options
+        multiple: True lets people pick more than one option (default: one)
+
+    Returns:
+        A dictionary containing success status and a status message
+    """
+    success, status_message = whatsapp_send_poll(recipient, question, options, multiple)
+    return {"success": success, "message": status_message}
 
 @mcp.tool()
 def send_file(recipient: str, media_path: str) -> Dict[str, Any]:

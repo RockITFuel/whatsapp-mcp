@@ -203,31 +203,78 @@ type SendMessageRequest struct {
 	MediaPath string `json:"media_path,omitempty"`
 }
 
+// parseRecipient takes a JID ("...@g.us", "...@s.whatsapp.net") or a bare phone number with country code.
+func parseRecipient(recipient string) (types.JID, error) {
+	if strings.Contains(recipient, "@") {
+		jid, err := types.ParseJID(recipient)
+		if err != nil {
+			return types.JID{}, fmt.Errorf("Error parsing JID: %v", err)
+		}
+		return jid, nil
+	}
+	return types.JID{User: recipient, Server: "s.whatsapp.net"}, nil
+}
+
+// SendPollRequest is a poll for a chat: a question, 2 to 12 options, and whether people may pick more than one.
+type SendPollRequest struct {
+	Recipient string   `json:"recipient"`
+	Question  string   `json:"question"`
+	Options   []string `json:"options"`
+	Multiple  bool     `json:"multiple,omitempty"`
+}
+
+// sendPoll sends a native WhatsApp poll, so a group can vote instead of answering in text.
+func sendPoll(client *whatsmeow.Client, messageStore *MessageStore, req SendPollRequest) (bool, string) {
+	if !client.IsConnected() {
+		return false, "Not connected to WhatsApp"
+	}
+	if strings.TrimSpace(req.Question) == "" {
+		return false, "Question is required"
+	}
+	if len(req.Options) < 2 || len(req.Options) > 12 {
+		return false, "A poll needs 2 to 12 options"
+	}
+	seen := map[string]bool{}
+	for _, option := range req.Options {
+		if strings.TrimSpace(option) == "" {
+			return false, "Options must not be empty"
+		}
+		if seen[option] {
+			return false, fmt.Sprintf("Option %q appears twice", option)
+		}
+		seen[option] = true
+	}
+	recipientJID, err := parseRecipient(req.Recipient)
+	if err != nil {
+		return false, err.Error()
+	}
+	selectable := 1
+	if req.Multiple {
+		selectable = 0 // 0 lets people pick any number of options
+	}
+	resp, err := client.SendMessage(context.Background(), recipientJID, client.BuildPollCreation(req.Question, req.Options, selectable))
+	if err != nil {
+		return false, fmt.Sprintf("Error sending poll: %v", err)
+	}
+	// Like text sends, keep our own poll in the chat history, as readable text.
+	if client.Store.ID != nil {
+		text := fmt.Sprintf("[poll] %s: %s", req.Question, strings.Join(req.Options, " / "))
+		if err := messageStore.StoreMessage(resp.ID, recipientJID.String(), client.Store.ID.User, text, resp.Timestamp, true, "", "", "", nil, nil, nil, 0); err != nil {
+			fmt.Printf("Failed to store sent poll: %v\n", err)
+		}
+	}
+	return true, fmt.Sprintf("Poll sent to %s", req.Recipient)
+}
+
 // Function to send a WhatsApp message
 func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, recipient string, message string, mediaPath string) (bool, string) {
 	if !client.IsConnected() {
 		return false, "Not connected to WhatsApp"
 	}
 
-	// Create JID for recipient
-	var recipientJID types.JID
-	var err error
-
-	// Check if recipient is a JID
-	isJID := strings.Contains(recipient, "@")
-
-	if isJID {
-		// Parse the JID string
-		recipientJID, err = types.ParseJID(recipient)
-		if err != nil {
-			return false, fmt.Sprintf("Error parsing JID: %v", err)
-		}
-	} else {
-		// Create JID from phone number
-		recipientJID = types.JID{
-			User:   recipient,
-			Server: "s.whatsapp.net", // For personal chats
-		}
+	recipientJID, err := parseRecipient(recipient)
+	if err != nil {
+		return false, err.Error()
 	}
 
 	msg := &waProto.Message{}
@@ -758,6 +805,29 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			Success: success,
 			Message: message,
 		})
+	})
+
+	// Handler for sending a poll
+	http.HandleFunc("/api/poll", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req SendPollRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request format", http.StatusBadRequest)
+			return
+		}
+		if req.Recipient == "" {
+			http.Error(w, "Recipient is required", http.StatusBadRequest)
+			return
+		}
+		success, message := sendPoll(client, messageStore, req)
+		w.Header().Set("Content-Type", "application/json")
+		if !success {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		json.NewEncoder(w).Encode(SendMessageResponse{Success: success, Message: message})
 	})
 
 	// Handler for downloading media
