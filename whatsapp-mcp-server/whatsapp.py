@@ -896,3 +896,78 @@ def get_poll_results(chat_jid: str, poll_id: Optional[str] = None) -> Dict[str, 
         }
     finally:
         conn.close()
+
+
+def _parse_time(value: Optional[str], name: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"Invalid date format for {name!r}: {value}. Please use ISO-8601 format.")
+    return parsed if parsed.tzinfo else parsed.astimezone()
+
+
+def _person_label(ident: Optional[str]) -> Optional[str]:
+    person = directory().resolve(ident)
+    if person and person.is_me:
+        return "Me"
+    return (person.name if person else None) or ident
+
+
+def list_calls(after: Optional[str] = None, before: Optional[str] = None, chat_jid: Optional[str] = None,
+               query: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """Calls from the call log, newest first, with names resolved and the duration in seconds and minutes."""
+    start_after, start_before = _parse_time(after, "after"), _parse_time(before, "before")
+    conn = sqlite3.connect(MESSAGES_DB_PATH)
+    try:
+        rows = conn.execute(
+            "SELECT calls.call_id, calls.chat_jid, chats.name, calls.group_jid, calls.creator, calls.is_incoming,"
+            " calls.is_video, calls.result, calls.start_time, calls.duration_seconds, calls.participants"
+            " FROM calls LEFT JOIN chats ON chats.jid = calls.chat_jid ORDER BY calls.start_time DESC"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []  # the bridge has not created the calls table yet
+    finally:
+        conn.close()
+    calls = []
+    for call_id, chat, chat_name, group, creator, incoming, video, result, start, duration, participants in rows:
+        started = datetime.fromisoformat(start)
+        if (start_after and started < start_after) or (start_before and started >= start_before):
+            continue
+        if chat_jid and chat != chat_jid:
+            continue
+        call = {
+            "call_id": call_id,
+            "chat_jid": chat,
+            "chat_name": chat_display_name(chat, chat_name) or chat,
+            "is_group": bool(group),
+            "direction": "incoming" if incoming else "outgoing",
+            "caller": _person_label(creator),
+            "type": "video" if video else "voice",
+            "result": result,
+            "start_time": started.isoformat(),
+            "duration_seconds": duration,
+            "duration_minutes": round(duration / 60, 1),
+            "participants": [
+                {"name": _person_label(p["jid"]), "jid": p["jid"], "result": p["result"]}
+                for p in json.loads(participants or "[]")
+            ],
+        }
+        if query and query.lower() not in json.dumps(call, ensure_ascii=False).lower():
+            continue
+        calls.append(call)
+        if len(calls) >= limit:
+            break
+    return calls
+
+
+def resync_calls() -> Dict[str, Any]:
+    """Ask the bridge to fetch the phone's whole call log again."""
+    try:
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/calls/resync", timeout=300)
+        return response.json()
+    except requests.RequestException as e:
+        return {"success": False, "message": f"Request error: {str(e)}"}
+    except ValueError:
+        return {"success": False, "message": f"Error: HTTP {response.status_code} - {response.text}"}
