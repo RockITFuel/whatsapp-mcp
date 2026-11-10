@@ -95,6 +95,10 @@ func NewMessageStore() (*MessageStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("failed to create poll tables: %v", err)
 	}
+	if err := store.initCalls(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create calls table: %v", err)
+	}
 	return store, nil
 }
 
@@ -774,6 +778,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 
 	registerActionRoutes(client, messageStore)
 	registerGroupRoutes(client)
+	registerCallRoutes(client, messageStore)
 
 	// Start the server
 	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -845,6 +850,9 @@ func main() {
 		case *events.HistorySync:
 			// Process history sync events
 			handleHistorySync(client, messageStore, v, logger)
+
+		case *events.AppState:
+			handleCallLogAppState(client, messageStore, v, logger)
 
 		case *events.Connected:
 			logger.Infof("Connected to WhatsApp")
@@ -1025,6 +1033,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 // Handle history sync events
 func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, historySync *events.HistorySync, logger waLog.Logger) {
 	fmt.Printf("Received history sync event with %d conversations\n", len(historySync.Data.Conversations))
+	storeCallLogs(client, messageStore, historySync.Data.GetCallLogRecords(), logger)
 
 	syncedCount := 0
 	for _, conversation := range historySync.Data.Conversations {

@@ -24,6 +24,8 @@ from whatsapp import (
     delete_message as whatsapp_delete_message,
     get_group_info as whatsapp_get_group_info,
     send_album as whatsapp_send_album,
+    list_calls as whatsapp_list_calls,
+    resync_calls as whatsapp_resync_calls,
 )
 
 # Initialize FastMCP server
@@ -231,6 +233,39 @@ def get_poll_results(chat_jid: str, poll_id: Optional[str] = None) -> Dict[str, 
         Only votes cast after the bridge learned of the poll are known.
     """
     return whatsapp_get_poll_results(chat_jid, poll_id)
+
+@mcp.tool()
+def list_calls(
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    chat_jid: Optional[str] = None,
+    query: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """List WhatsApp voice and video calls from the phone's call log, newest first.
+
+    Args:
+        after: Optional ISO-8601 time; only calls that started at or after it
+        before: Optional ISO-8601 time; only calls that started before it
+        chat_jid: Optional chat JID (a person or a group) to filter by
+        query: Optional text matched against the chat name, caller and participants
+        limit: Maximum number of calls to return (default 50)
+
+    Returns:
+        Per call: chat and caller names, group or not, direction, voice or video, result
+        (CONNECTED, MISSED, REJECTED, ...), start time, duration and participants.
+        Only call metadata exists; calls are not recorded.
+    """
+    return whatsapp_list_calls(after, before, chat_jid, query, limit)
+
+@mcp.tool()
+def resync_calls() -> Dict[str, Any]:
+    """Fetch the phone's whole call log again, for calls from before the bridge stored them.
+
+    Returns:
+        Success, the number of stored calls afterwards, and any errors per app state patch.
+    """
+    return whatsapp_resync_calls()
 
 @mcp.tool()
 def send_file(recipient: str, media_path: str, caption: Optional[str] = None) -> Dict[str, Any]:
